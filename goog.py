@@ -25,11 +25,21 @@ def make_token(scope, cred_name):
             pickle.dump(creds, token)
     return creds
 
-DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
-drive_token = make_token(DRIVE_SCOPES, "drive")
-drive = build('drive', 'v3', credentials=drive_token)
+# DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
+# drive_token = make_token(DRIVE_SCOPES, "drive")
+# drive = build('drive', 'v3', credentials=drive_token)
 
 SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 sheets_token = make_token(SHEETS_SCOPES, "sheets")
 sheets = build('sheets', 'v4', credentials=sheets_token)
 
+def write_sheet(sheet, values, r='', mode="ROWS"):
+    sheets.spreadsheets().values().update(spreadsheetId=sheet, range=r, valueInputOption="RAW", body={
+        'values':values,
+        'majorDimension':mode
+    }).execute()
+
+def index_to_column(idx):
+    major = chr(65 + floor(idx / 26 - 1)) if idx > 25 else ""
+    minor = chr(65 + idx % 26)
+    return str(major + minor)
