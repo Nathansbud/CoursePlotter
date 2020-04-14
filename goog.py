@@ -39,6 +39,11 @@ def write_sheet(sheet, values, r='', mode="ROWS"):
         'majorDimension':mode
     }).execute()
 
+def get_sheet(sheet, r='', mode='ROWS'):
+    if len(r) > 0:
+        return sheets.spreadsheets().values().get(spreadsheetId=sheet, range=r, majorDimension=mode).execute()
+    return sheets.spreadsheets().get(spreadsheetId=sheet).execute()
+
 def index_to_column(idx):
     major = chr(65 + floor(idx / 26 - 1)) if idx > 25 else ""
     minor = chr(65 + idx % 26)
