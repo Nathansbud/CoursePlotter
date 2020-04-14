@@ -74,7 +74,7 @@ for term, t in enumerate(term_selector.find_elements_by_xpath(".//option[@value=
             ci = course_data.find_elements_by_class_name("instructor-name")
             course_instructor = ci[0].text if len(ci) > 0 else ""
 
-            rr = course_data.find_elements_by_class_name("registration_restrictions")
+            rr = course_data.find_elements_by_class_name("section--registration_restrictions")
             course_requirements = rr[0].find_element_by_class_name("section__content").text if len(rr) > 0 else ""
 
             course_dict[terms[term]][str(linc)+"000"][course_code] = {
