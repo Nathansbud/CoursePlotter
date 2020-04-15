@@ -12,18 +12,17 @@ import atexit
 import traceback
 import os
 import json
+from copy import deepcopy
+import time
 
 options = webdriver.ChromeOptions()
 browser = webdriver.Chrome(options=options)
-# atexit.register(browser.quit)
+atexit.register(browser.quit)
 
 sheet_id = "1-5-Wk-GXcZVccyHVAl77P3n71MSyc3js3-c1z1WrEzY"
-review_link_column = "G"
 
-class HandleMethod(Enum):
-    NONE = 0
-    NUMBER_AVERAGE = 1
-    YES_NO = 2
+instructor_column = "F"
+review_link_column = "G"
 
 def populate_courses():
     browser.get("https://cab.brown.edu")
@@ -48,7 +47,7 @@ def populate_courses():
             for i, c in enumerate(classes):
                 c.click()
                 try:
-                    ww = WebDriverWait(browser, 5).until(expected_conditions.text_to_be_present_in_element((By.CLASS_NAME, "dtl-course-code"), c.find_element_by_class_name("result__code").text))
+                    WebDriverWait(browser, 5).until(expected_conditions.text_to_be_present_in_element((By.CLASS_NAME, "dtl-course-code"), c.find_element_by_class_name("result__code").text))
                 except TimeoutException:
                     try:
                         tab_text = c.text.split("\n")
@@ -93,75 +92,92 @@ def populate_courses():
                     "reviews":course_review_link,
                     "instructor":course_instructor
                 }
-                vals = [[course_department, course_number, course_name, course_description, course_instructor, course_requirements, course_review_link]]
+                vals = [[course_department, course_number, course_name, course_description, course_requirements, course_instructor, course_review_link]]
                 Thread(target=lambda: write_sheet(sheet=sheet_id, values=vals,
                                                   r=f"{terms[term]}!A{i+2+600*linc}:{index_to_column(len(vals[0]))}{i+2+600*linc}")).start()
                 print(i, course_code, course_name)
                 course_data.find_element_by_class_name("panel__back").click()
 
+class HandleMethod(Enum):
+    NONE = 0
+    NUMBER_AVERAGE = 1
+    YES_NO = 2
+    CONCENTRATOR = 3
+
+review_template = {
+    "minhours": {"fmt": "Average Hours"},
+    "maxhours": {"fmt": "Max Hours"},
+    "difficulty": {"fmt": "Difficult"},
+    "learned": {"fmt": "Useful"},
+    "loved": {"fmt": "Enjoyable"},
+    "effective": {"fmt": "Presentation"},
+    "encouraged": {"fmt": "Discussion"},
+    "passionate": {"fmt": "Passion"},
+    "grading-fairness": {"fmt": "Fair Grading"},
+    "receptive": {"fmt": "Feedback Receptiveness"},
+    "clear-goals":{"fmt":"Clear Goals"},
+    "readings":{"fmt":"Readings Worthwhile"},
+    "class-materials":{"fmt":"Useful Materials"},
+    "grading-speed": {"fmt": "Grading Speed"},
+    "efficient":{"fmt":"Efficiency"},
+    "availableFeedback": {"fmt":"Feedback Available"},
+    "conc":{"fmt":"Concentrator", "method":HandleMethod.CONCENTRATOR},
+    "requirement":{"fmt":"Took Requirement", "method":HandleMethod.YES_NO},
+    "non-conc": {"fmt":"Good for NC"},  # ???
+    "grade":{"fmt":"Student Grade", "method":HandleMethod.NONE},
+    "attendance":{"fmt":"Attendance Weighted"},
+}
+
 def fmean(l):
     fl = list(filter(None, l))
-    return sum([int(f) for f in fl])/len(fl)
+    return sum([float(f) for f in fl])/len(fl)
 
 def get_reviews():
     with open(os.path.join(os.path.dirname(__file__), "credentials", "brown.json")) as jf: creds = json.load(jf)
-    review_links = get_sheet(sheet=sheet_id, r=f"fall!{review_link_column}2:{review_link_column}1500", mode="COLUMNS").get("values")[0]
+    course_cells = [{"instructor":p[0].strip() if len(p) > 0 else "", "url":p[1] if len(p) > 1 else ""} for p in
+                    get_sheet(sheet=sheet_id, r=f"fall!{instructor_column}2:{review_link_column}1500", mode="ROWS").get("values")]
     browser.get("https://thecriticalreview.org/search/FORCE_LOGIN")
     browser.find_element_by_id("username").send_keys(creds['username'])
     browser.find_element_by_id("password").send_keys(creds['password'])
     browser.find_element_by_tag_name("button").click()
-    for i, url in enumerate(review_links):
-        if url and "thecriticalreview" in url:
-            browser.get(url)
+    for i, entry in enumerate(course_cells):
+        if entry['url'] and "thecriticalreview" in entry['url']:
+            browser.get(entry['url'])
             if not len(browser.find_elements_by_class_name("course_title")) > 0:
                 Thread(target=lambda: write_sheet(sheet=sheet_id, values=[["No reviews found!"]], r=f"fall!H{i+2}")).start()
             else:
-                WebDriverWait(browser, 10).until(expected_conditions.presence_of_element_located((By.CLASS_NAME, "review_data")))
-                rd = browser.find_element_by_class_name("review_data").get_attribute("data-test-value")
-                review_data = json.loads(rd) if rd else {}
-                class_data = {
-                    "clear-goals":{"fmt":"Clear Goals"},
-                    "grading-speed":{"fmt":"Grading Speed"},
-                    "readings":{"fmt":"Readings Worthwhile"},
-                    "grading-fairness":{"fmt":"Fair Grading"}
-                }
-                for k in review_data:
-                    if k in class_data:
-                        if not "method" in class_data[k] or class_data[k]['method'] == HandleMethod.NUMBER_AVERAGE:
-                            class_data[k]['value'] = fmean(review_data[k])
-                        elif class_data[k]['method'] == HandleMethod.YES_NO:
-                            class_data[k]['value'] = review_data[k].count("N") / review_data[k].count("Y")
+                if len(entry['instructor']) > 0 and not entry['instructor'] == "TBD":
+                    instructor_last_name = entry['instructor'].split(" ")[-1]
+                    if not browser.find_element_by_id("professor").text.startswith(instructor_last_name):
+                        history_dropdown = browser.find_element_by_id("past_offerings")
+                        history_dropdown.find_element_by_tag_name("input").send_keys(instructor_last_name)
+                        first_selection, no_item = history_dropdown.find_elements_by_xpath("//*[contains(@class, 'item') and not(contains(@class, 'filtered'))]"), history_dropdown.find_elements_by_class_name("message")
+                        if len(no_item) != 0:
+                            print(f"No reviews available for professor {entry['instructor']} at URL {entry['url']}'!")
+                            continue
+                        else:
+                            [f for f in first_selection if len(f.text) > 0][0].click()
 
-                print(class_data)
+                    WebDriverWait(browser, 10).until(expected_conditions.presence_of_element_located((By.CLASS_NAME, "review_data")))
+                    rd = browser.find_element_by_class_name("review_data").get_attribute("data-test-value")
+                    review_data = json.loads(rd) if rd else {}
+                    review_formatted = deepcopy(review_template)
+
+                    for k in review_data:
+                        if k in review_formatted:
+                            if not "method" in review_formatted[k] or review_formatted[k]['method'] == HandleMethod.NUMBER_AVERAGE:
+                                review_formatted[k]['value'] = fmean(review_data[k])
+                            elif review_formatted[k]['method'] == HandleMethod.YES_NO:
+                                cy, cn = review_data[k].count("Y"), review_data[k].count("N")
+                                review_formatted[k]['value'] = cy/(cy+cn)
+                            elif review_formatted[k]['method'] == HandleMethod.YES_NO:
+                                cy, cn = review_data[k].count("C"), review_data[k].count("D")+review_data[k].count("N")
+                                review_formatted[k]['value'] = cy/(cy+cn)
+
+                    print(review_formatted)
 
 
 
-                """
-                "clear-goals",
-                "grading-speed",
-                "grading-fairness",
-                "readings",
-                "assignments",
-                "class-materials",
-                "learned",
-                "loved",
-                "non-concs",
-                "effective",
-                "efficient",
-                "pacing",
-                "pacing",
-                "motivated",
-                "feedback-available",
-                "feedback-useful",
-                "conc",
-                "requirement",
-                "graded",
-                "grade":["B","A","B","A","A","C","","B","A","","A","B","A","A","A","C","B","A","B","A","B","B"],
-                "attendance",
-                "minhours",
-                "maxhours"
-
-                """
 
 
                 # Thread(target=lambda: write_sheet(sheet=sheet_id, values=[["Reviews found lmao"]], r=f"fall!H{i + 2}")).start()
