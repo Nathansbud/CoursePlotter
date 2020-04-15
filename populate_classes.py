@@ -23,6 +23,8 @@ sheet_id = "1-5-Wk-GXcZVccyHVAl77P3n71MSyc3js3-c1z1WrEzY"
 
 instructor_column = "F"
 review_link_column = "G"
+review_source_column = "H"
+review_data_column = "I"
 
 def populate_courses():
     browser.get("https://cab.brown.edu")
@@ -121,8 +123,8 @@ review_template = {
     "grading-speed": {"fmt": "Grading Speed"},
     "efficient":{"fmt":"Efficiency"},
     "availableFeedback": {"fmt":"Feedback Available"},
-    "conc":{"fmt":"Concentrator", "method":HandleMethod.CONCENTRATOR},
-    "requirement":{"fmt":"Took Requirement", "method":HandleMethod.YES_NO},
+    "conc":{"fmt":"Concentrator (%)", "method":HandleMethod.CONCENTRATOR},
+    "requirement":{"fmt":"Took for Requirement (%)", "method":HandleMethod.YES_NO},
     "non-conc": {"fmt":"Good for NC"},  # ???
     "grade":{"fmt":"Student Grade", "method":HandleMethod.NONE},
     "attendance":{"fmt":"Attendance Weighted"},
@@ -130,12 +132,13 @@ review_template = {
 
 def fmean(l):
     fl = list(filter(None, l))
-    return sum([float(f) for f in fl])/len(fl)
+    return round(sum([float(f) for f in fl])/len(fl), 2)
 
 def get_reviews():
     with open(os.path.join(os.path.dirname(__file__), "credentials", "brown.json")) as jf: creds = json.load(jf)
     course_cells = [{"instructor":p[0].strip() if len(p) > 0 else "", "url":p[1] if len(p) > 1 else ""} for p in
                     get_sheet(sheet=sheet_id, r=f"fall!{instructor_column}2:{review_link_column}1500", mode="ROWS").get("values")]
+    Thread(target=lambda: write_sheet(sheet=sheet_id, values=[["Most Recent Source"] + [review_template[r]['fmt'] for r in review_template]], r=f"fall!{review_source_column}1")).start()
     browser.get("https://thecriticalreview.org/search/FORCE_LOGIN")
     browser.find_element_by_id("username").send_keys(creds['username'])
     browser.find_element_by_id("password").send_keys(creds['password'])
@@ -143,20 +146,33 @@ def get_reviews():
     for i, entry in enumerate(course_cells):
         if entry['url'] and "thecriticalreview" in entry['url']:
             browser.get(entry['url'])
+            sem = ""
             if not len(browser.find_elements_by_class_name("course_title")) > 0:
-                Thread(target=lambda: write_sheet(sheet=sheet_id, values=[["No reviews found!"]], r=f"fall!H{i+2}")).start()
+                Thread(target=lambda: write_sheet(sheet=sheet_id, values=[["No reviews found!"]], r=f"fall!{review_source_column}{i+2}")).start()
             else:
-                if len(entry['instructor']) > 0 and not entry['instructor'] == "TBD":
+                if not (len(entry['instructor']) > 0 and not entry['instructor'] == "TBD"):
+                    Thread(target=lambda: write_sheet(sheet=sheet_id, values=[[f"No professor available; reviews withheld"]], r=f"fall!{review_source_column}{i + 2}")).start()
+                else:
                     instructor_last_name = entry['instructor'].split(" ")[-1]
+                    sem = browser.find_element_by_id("semester").text
                     if not browser.find_element_by_id("professor").text.startswith(instructor_last_name):
                         history_dropdown = browser.find_element_by_id("past_offerings")
-                        history_dropdown.find_element_by_tag_name("input").send_keys(instructor_last_name)
-                        first_selection, no_item = history_dropdown.find_elements_by_xpath("//*[contains(@class, 'item') and not(contains(@class, 'filtered'))]"), history_dropdown.find_elements_by_class_name("message")
-                        if len(no_item) != 0:
-                            print(f"No reviews available for professor {entry['instructor']} at URL {entry['url']}'!")
-                            continue
+                        inputs = history_dropdown.find_elements_by_tag_name("input")
+                        if len(inputs) > 0:
+                            inputs[0].send_keys(instructor_last_name)
+                            first_selection, no_item = history_dropdown.find_elements_by_xpath("//*[contains(@class, 'item') and not(contains(@class, 'filtered'))]"), history_dropdown.find_elements_by_class_name("message")
+                            if len(no_item) != 0:
+                                Thread(target=lambda: write_sheet(sheet=sheet_id, values=[[f"No reviews found for professor {entry['instructor']}!"]], r=f"fall!{review_source_column}{i + 2}")).start()
+                                continue
+                            else:
+                                lt = [f for f in first_selection if len(f.text) > 0]
+                                if len(lt) > 0:
+                                    lt[0].click()
+                                else:
+                                    Thread(target=lambda: write_sheet(sheet=sheet_id, values=[[f"No reviews found for professor {entry['instructor']}!"]], r=f"fall!{review_source_column}{i + 2}")).start()
+
                         else:
-                            [f for f in first_selection if len(f.text) > 0][0].click()
+                            Thread(target=lambda: write_sheet(sheet=sheet_id, values=[[f"No reviews found for professor {entry['instructor']}!"]],r=f"fall!{review_source_column}{i + 2}")).start()
 
                     WebDriverWait(browser, 10).until(expected_conditions.presence_of_element_located((By.CLASS_NAME, "review_data")))
                     rd = browser.find_element_by_class_name("review_data").get_attribute("data-test-value")
@@ -169,18 +185,11 @@ def get_reviews():
                                 review_formatted[k]['value'] = fmean(review_data[k])
                             elif review_formatted[k]['method'] == HandleMethod.YES_NO:
                                 cy, cn = review_data[k].count("Y"), review_data[k].count("N")
-                                review_formatted[k]['value'] = cy/(cy+cn)
+                                review_formatted[k]['value'] = round(cy/(cy+cn), 2)
                             elif review_formatted[k]['method'] == HandleMethod.YES_NO:
                                 cy, cn = review_data[k].count("C"), review_data[k].count("D")+review_data[k].count("N")
-                                review_formatted[k]['value'] = cy/(cy+cn)
-
-                    print(review_formatted)
-
-
-
-
-
-                # Thread(target=lambda: write_sheet(sheet=sheet_id, values=[["Reviews found lmao"]], r=f"fall!H{i + 2}")).start()
+                                review_formatted[k]['value'] = round(cy/(cy+cn), 2)
+                    Thread(target=lambda: write_sheet(sheet=sheet_id, values=[[sem]+[review_formatted[r]['value'] if 'value' in review_formatted[r] else "" for r in review_formatted]], r=f"fall!{review_source_column}{i+2}")).start()
 
 
 if __name__ == '__main__':
